@@ -1,0 +1,280 @@
+---
+title: "Assingment"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(glmnet)
+library(reshape)
+library(ggplot2)
+library(gbm)
+```
+
+# 1. Exploring the data
+
+## Potential isuues when statitstically modelling data
+
+* High dimensionality p > n. The fact that there is larger number of predictors then observations causes OLS to not have a unique solution.
+* Many of the predictors are likely to be correlated.
+* Fitting model with high number of predictors decreases the interpretability of the model. 
+* Large number of predictorts means large number of degrees of freedom which inevitably leads to high variance of the model and consequently large test set error (failure of model to generalize). 
+
+## Data Preparation 
+
+```{r,echo=FALSE}
+load('/home/ivana/Downloads/Cortex(2).rdata')
+names(cortex)
+set.seed(1)
+train = sample(1:nrow(cortex), nrow(cortex)*2/3)
+test = (-train)
+x = model.matrix(cortex$Behavior~., data = cortex[, 1:70])
+x.train = x[train,]
+x.test = x[test,]
+y = cortex$Behavior
+y = ifelse(y == "C/S", 1, 0)
+y.train = y[train]
+y.test = y[test]
+```
+## Exploring the Correlations in the dataset
+
+The correlation matrix was constructed with aim to explore correlations between the expression levels of different genes. The correlation matrix produces 48300 pairs of non-equal proteins (i.e. proteins with correlation equal to 1). 
+```{r}
+correlationMatrix=(cor(cortex[,1:70]))
+melted = melt(correlationMatrix)
+#How many genes are more that 90% correlated? & How many genes are more than 50% correlated?
+cor_0.9 = 0
+cor_0.5 = 0
+
+for(i in 1:nrow(melted)) {
+  if (melted[i,1] != melted[i,2]) {
+    if (melted[i,3] >= 0.9) {
+      cor_0.9 = cor_0.9 + 1
+    } 
+    if (melted[i,3] >= 0.5) {
+      cor_0.5 = cor_0.5 + 1
+    }
+  }
+}
+
+perc_0.9 = cor_0.9*100/(nrow(melted)-70)
+perc_0.5 = cor_0.5*100/(nrow(melted)-70)
+perc_0.9 # 0.62%
+perc_0.5 # 16.77%
+
+par(mfrow = c(1,2))
+ggplot(data = melted, aes(x=X1, y=X2, fill=value)) +  geom_tile() + ggtitle("Heatmap: All proteins expression levels") 
+
+#heatmap visualization of correlating matrix for 10 genes
+correlationMatrix2=(cor(cortex[,1:10]))
+melted2 = melt(correlationMatrix2)
+ggplot(data = melted2, aes(x=X1, y=X2, fill=value)) +  geom_tile() + ggtitle("Heatmap: 10 proteins expression levels") 
+```
+
+# 2. Training Rigge and LASSO models
+
+```{r}
+grid = 10^seq(10, -2, length = 100)
+```
+
+## Ridge model 
+
+### Serching for optimal model with cross-validation
+```{r}
+par(mfrow = c(1,2))
+
+#trining the model
+ridge.model <- glmnet(x.train,y.train, alpha=0, lambda=NULL, family = "binomial")
+plot(ridge.model)
+title("Ridge Model")
+
+
+#Choosing optimal value for lambda
+set.seed(1)
+ridge.cv = cv.glmnet(x.train, y.train, alpha=0, family = "binomial", nfolds = length(train)) #lenght LOOCV
+plot(ridge.cv)
+title("CV - Ridge Model")
+best.lambda = ridge.cv$lambda.min
+
+#Ridge model with best lambda selected by CV
+model.ridge = glmnet(x.train, y.train, alpha=0, family = "binomial", lambda = best.lambda)
+#Displaying the coefficietns
+coef(model.ridge)
+```
+
+### What is the predictive power of the model? 
+
+Dummy encoding of the categorical varible:  C/S = 1, S/S = 0.
+
+```{r}
+ridge.pred=predict(ridge.model ,s=best.lambda ,newx=x.test,type="response")
+predictions=rep(0 ,length(y.test))
+predictions[ridge.pred>0.5]= 1
+table(y.test,predictions)
+performanceRidge=length(which(predictions==y.test))/length(y.test)
+performanceRidge #11+9)/24 = 83%
+```
+
+
+
+## LASSO model 
+
+```{r}
+par(mfrow = c(1,2))
+
+#trining the model
+lasso.model <- glmnet(x.train,y.train, alpha=1, lambda=NULL, family = "binomial")
+plot(lasso.model)
+title("LASSO Model")
+
+
+#Choosing optimal value for lambda
+set.seed(1)
+lasso.cv = cv.glmnet(x.train, y.train, alpha=1, family = "binomial", nfolds = length(train)) #lenght LOOCV
+plot(lasso.cv)
+title("CV - Lasso Model")
+best.lambda = lasso.cv$lambda.min
+
+#Ridge model with best lambda selected by CV
+model.lasso = glmnet(x.train, y.train, alpha=1, family = "binomial", lambda = best.lambda)
+#Displaying the coefficietns
+coef(model.lasso)
+```
+
+
+
+
+### What is the predictive power of the model? 
+
+Dummy encoding of the categorical varible:  C/S = 1, S/S = 0.
+
+```{r}
+lasso.pred=predict(lasso.model ,s=best.lambda ,newx=x.test,type="response")
+predictions=rep(0 ,length(y.test))
+predictions[lasso.pred>0.5]= 1
+table(y.test,predictions)
+performanceLasso=length(which(predictions==y.test))/length(y.test)
+performanceLasso #14+9)/24 = 95,8%
+```
+
+
+# Boosting model
+
+```{r}
+set.seed(1)
+cortex$dummy = ifelse(cortex$Behavior == "C/S", 1, 0)
+model.boost = gbm(cortex$dummy ~ ., data = cortex[train],  distribution = "bernoulli", n.trees = 5000, interaction.depth = 5)
+summary(model.boost)
+```
+
+ The first two variables seem to be of greatest importance. 
+ 
+
+```{r}
+plot(model.boost, i = "DYRK1A_N")
+plot(model.boost, i = "pS6_N")
+``` 
+
+### What is the predictive power of the model? 
+
+```{r}
+boost.pred = predict(model.boost, cortex[test, ], n.trees = 5000)
+predictions=rep(0 ,length(cortex[test, "dummy"]))
+predictions[boost.pred>0.5]= 1
+table(cortex[test, "dummy"],predictions)
+performanceBoost=length(which(predictions==cortex[test, "dummy"]))/length(cortex[test, "dummy"])
+performanceBoost # 100%
+```
+
+# Does Memantine injection influence protein values when controlling for genotype and tretement?
+
+One-way ANOVA -> H0: mean(protein expression levels +Memantime) == mean(protein expression levels -Memantime)
+Not taing the effect of genotype or behaviour. 
+
+```{r}
+treatement.indexes = cortex$Treatment == "Memantine"
+differentially_expressed = c()
+
+for (i in 1:70){
+  treated = cortex[treatement.indexes, i]
+  untreated = cortex[!treatement.indexes, i]
+  test = t.test(treated, untreated, alternative = "two.sided")
+  if(test$p.value < 0.05) {
+    differentially_expressed = c(differentially_expressed, names(cortex)[i])
+  }
+}
+
+differentially_expressed
+
+par(mfrow = c(3,3))
+for (i in differentially_expressed) {
+  boxplot(cortex[, i] ~ cortex$Treatment, ylab = i, xlab = "treatement")
+}
+
+```
+
+
+## Taking the 'Behavior' into account
+Two-way anova
+
+```{r}
+differentially_expressed_behavior = c()
+
+for (i in 1:70){
+  model.anova = aov(cortex[, i] ~ Treatment + Behavior, data = cortex, contrasts = list(Behavior = "contr.sum", Treatment = "contr.sum"))
+  p.val.treatement = summary(model.anova)[[1]][["Pr(>F)"]][1]
+  p.val.behaviour = summary(model.anova)[[1]][["Pr(>F)"]][2]
+  if(p.val.behaviour < 0.05 && p.val.treatement < 0.05) {
+    differentially_expressed_behavior = c(differentially_expressed_behavior, names(cortex)[i])
+  }
+}
+
+differentially_expressed_behavior
+```
+
+
+## Taking the 'Behaviour' into account
+
+
+Two-way anova
+
+```{r}
+
+differentially_expressed_genotype = c()
+
+for (i in 1:70){
+  model.anova = aov(cortex[, i] ~ Treatment + Genotype, data = cortex, contrasts = list(Genotype = "contr.sum", Treatment = "contr.sum"))
+  p.val.treatement = summary(model.anova)[[1]][["Pr(>F)"]][1]
+  p.val.genotype = summary(model.anova)[[1]][["Pr(>F)"]][2]
+  if(p.val.genotype < 0.05 && p.val.treatement < 0.05) {
+    differentially_expressed_genotype = c(differentially_expressed_genotype, names(cortex)[i])
+  }
+}
+
+differentially_expressed_genotype
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
