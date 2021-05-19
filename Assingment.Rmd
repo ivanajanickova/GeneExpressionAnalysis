@@ -1,6 +1,8 @@
 ---
 title: "Assingment"
 output: pdf_document
+author: Ivana Janickova (r0816203)
+fig_caption: yes
 ---
 
 ```{r setup, include=FALSE}
@@ -9,22 +11,26 @@ library(glmnet)
 library(reshape)
 library(ggplot2)
 library(gbm)
+library(pROC)
+library(ROCR)
+library(grid)
+library(gridBase)
+library(viridis)
 ```
 
 # 1. Exploring the data
 
-## Potential isuues when statitstically modelling data
+## Potential isues when statistically modelling data
 
 * High dimensionality p > n. The fact that there is larger number of predictors then observations causes OLS to not have a unique solution.
 * Many of the predictors are likely to be correlated.
-* Fitting model with high number of predictors decreases the interpretability of the model. 
-* Large number of predictorts means large number of degrees of freedom which inevitably leads to high variance of the model and consequently large test set error (failure of model to generalize). 
+* Fitting a model with high number of predictors decreases the interpretability of the model. 
+* Large number of predictors means large number of degrees of freedom which inevitably leads to high variance of the model and consequently large test set error (failure of model to generalize). 
 
 ## Data Preparation 
-
-```{r,echo=FALSE}
+The `cortex` data set was split into train & test set in the ration train set = 2/3 of data; test = 1/3 of data. The categorical variable `Behaviour` transformed into a dummy variable as it is later used as a response variable.
+```{r,echo=FALSE, warning=FALSE}
 load('/home/ivana/Downloads/Cortex(2).rdata')
-names(cortex)
 set.seed(1)
 train = sample(1:nrow(cortex), nrow(cortex)*2/3)
 test = (-train)
@@ -38,73 +44,116 @@ y.test = y[test]
 ```
 ## Exploring the Correlations in the dataset
 
-The correlation matrix was constructed with aim to explore correlations between the expression levels of different genes. The correlation matrix produces 48300 pairs of non-equal proteins (i.e. proteins with correlation equal to 1). 
-```{r}
+The correlation matrix was constructed with aim to explore correlations between the expression levels of different genes. The correlation matrix produces 48300 pairs of non-equal proteins (i.e. proteins with correlation equal to 1). From these pairs the percentage of pairs that are more than 90% correlated is 0.62% and the percentage of pairs that are more than 50% correlated is 16.77%. This result is supprising since given the nature of the data - measurements of protein expression level in different conditions - the expected percentage of highly correlated predictors was larger.
+
+The two heatmaps were constructed from the correlation matrices (only the partialis included in the report *Figure 1*). The first heatmap contains all of the protein expression levels. In order to zoom in on and make the visualization more meaningful a second heatmap for sample of 10 proteins was constructed. The light blue color displays regions of higher correlations of protein expression levels. 
+```{r, echo=FALSE, warning=FALSE, fig.cap="\\label{fig:figs} Heatmap of correlations between 10 protein expression levels", fig.width=5,fig.height=4, fig.align="center"}
 correlationMatrix=(cor(cortex[,1:70]))
 melted = melt(correlationMatrix)
 #How many genes are more that 90% correlated? & How many genes are more than 50% correlated?
 cor_0.9 = 0
 cor_0.5 = 0
+names.cor_0.9 = c()
 
 for(i in 1:nrow(melted)) {
   if (melted[i,1] != melted[i,2]) {
     if (melted[i,3] >= 0.9) {
       cor_0.9 = cor_0.9 + 1
+      names.cor_0.9 = c(names.cor_0.9, as.character(melted[i,1]))
     } 
     if (melted[i,3] >= 0.5) {
       cor_0.5 = cor_0.5 + 1
     }
   }
 }
-
+names.cor_0.9 = unique(names.cor_0.9) # stores names of predictors that are more that 90% correlated
+ordered = melted[order(melted[,3], decreasing = TRUE),] # make orderd matrix for futher considerations
 perc_0.9 = cor_0.9*100/(nrow(melted)-70)
 perc_0.5 = cor_0.5*100/(nrow(melted)-70)
-perc_0.9 # 0.62%
-perc_0.5 # 16.77%
+#perc_0.9 # 0.62%
+#perc_0.5 # 16.77%
 
-par(mfrow = c(1,2))
-ggplot(data = melted, aes(x=X1, y=X2, fill=value)) +  geom_tile() + ggtitle("Heatmap: All proteins expression levels") 
+#ggplot(data = melted, aes(x=X1, y=X2, fill=value)) +  geom_tile() + ggtitle("Heatmap: All proteins expression levels") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 
 #heatmap visualization of correlating matrix for 10 genes
 correlationMatrix2=(cor(cortex[,1:10]))
 melted2 = melt(correlationMatrix2)
-ggplot(data = melted2, aes(x=X1, y=X2, fill=value)) +  geom_tile() + ggtitle("Heatmap: 10 proteins expression levels") 
-```
+ggplot(data = melted2, aes(x=X1, y=X2, fill=value)) +  geom_tile() + ggtitle("Heatmap: 10 proteins expression levels") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 
-# 2. Training Rigge and LASSO models
+``` 
 
-```{r}
-grid = 10^seq(10, -2, length = 100)
-```
+# 2. Training Ridge and LASSO models
 
-## Ridge model 
+## 2.1 Ridge model 
 
-### Serching for optimal model with cross-validation
-```{r}
+A logistic regression model using ridge regularization was used to find out how efficient is set of predictors to predict `Behavior` variable. 
+
+### 2.1.1 Searching for optimal model with cross-validation
+
+From the Cross-Validation plot it can be observed that a small value of lambda (`best.lambda = 4.143532`) minimizes the deviance. On the right plot we can see that with the rising value of *log(lambda)* the deviance is sharply increasing. The plot resembles a logarithmic curve. The plot on the left displays the change of coefficients value with respect to change in lambda. Each curve corresponds to a single predictor.  
+
+```{r, echo=FALSE, warning=FALSE, fig.cap="\\label{fig:figs}Ridge classification model", fig.height=4}
 par(mfrow = c(1,2))
 
 #trining the model
 ridge.model <- glmnet(x.train,y.train, alpha=0, lambda=NULL, family = "binomial")
 plot(ridge.model)
-title("Ridge Model")
 
 
 #Choosing optimal value for lambda
 set.seed(1)
 ridge.cv = cv.glmnet(x.train, y.train, alpha=0, family = "binomial", nfolds = length(train)) #lenght LOOCV
 plot(ridge.cv)
-title("CV - Ridge Model")
 best.lambda = ridge.cv$lambda.min
 
 #Ridge model with best lambda selected by CV
 model.ridge = glmnet(x.train, y.train, alpha=0, family = "binomial", lambda = best.lambda)
 #Displaying the coefficietns
-coef(model.ridge)
+coef.ridge = as.matrix(coef(model.ridge))
+
+
 ```
 
-### What is the predictive power of the model? 
+### 2.1.2 Displaying the values of chosen coefficients
 
-Dummy encoding of the categorical varible:  C/S = 1, S/S = 0.
+For better visualization of the most relevant predictors a barplot was used. The predictors with the largest absolute value are contributing with the highest wight to the model. 
+
+```{r,echo=FALSE, warning=FALSE, fig.cap="\\label{fig:figs} Values of RIDGE model coefficients", fig.width=15,fig.height=5, fig.align="center"}
+
+#Displaying the coefficietns
+coef.matrix = as.matrix(coef(model.ridge))
+#getting non-zero coefficients
+row_sub = apply(coef.matrix, 1, function(row) all(row !=0 ))
+coef.matrix = sort(coef.matrix[row_sub,])
+par(mfrow = c(1,1))
+midpts = barplot(coef.matrix, names.arg = "", col = viridis(10))
+title("Ridge coefficients for different proteins")
+## Use grid to add the labels    
+vps <- baseViewports()
+pushViewport(vps$inner, vps$figure, vps$plot)
+
+grid.text(names(coef.matrix),
+    x = unit(midpts, "native"), y=unit(-1, "lines"),
+    just="right", rot=50)
+
+popViewport(3)
+
+
+```
+
+### 2.1.3 What is the predictive power of the model? 
+
+Dummy encoding of the categorical variable:  C/S = 1, S/S = 0.
+
+The table below displays counts of:
+
+* True negative results = 11
+* True positive results = 9
+* False negative results = 0
+* False positive results = 4
+
+The total performance of the model calculated as *(TN count + TP count)/total count* is approximately 83%.
 
 ```{r}
 ridge.pred=predict(ridge.model ,s=best.lambda ,newx=x.test,type="response")
@@ -114,39 +163,86 @@ table(y.test,predictions)
 performanceRidge=length(which(predictions==y.test))/length(y.test)
 performanceRidge #11+9)/24 = 83%
 ```
+### 2.1.4 Selected proteins 
+
+The Ridge regularization method does not perform a variable selection as it is the case with the LASSO - hence all of the 70 predictors are `selected`. 
+
+```{r,echo=FALSE}
+vals=predict(model.ridge,s= best.lambda,type="coefficients")
+selected=colnames(x)[vals@i]
+#selected
+```
 
 
+## 2.2 LASSO model
 
-## LASSO model 
+A logistic regression model using LASSO regularization was used to find out how efficient is set of predictors to predict `Behavior` variable. The expectation is to find a subset of predictors that would be sufficient for this classification problem. 
 
-```{r}
+### 2.2.1 Searching for optimal model with cross-validation
+
+From the Cross-Validation plot it can be observed that a small value of lambda (`best.lambda = 0.00414`) minimizes the deviance. With the rising value of *log(lambda)* the deviance is slowly increasing for smallest values of *log(lambda)*. With the increasing *log(lambda)* value, the slope is increasing. This plot - as opposed to the ridge mode CV plot - resembles an exponential curve. 
+
+
+```{r, echo=FALSE, warning=FALSE, fig.cap="\\label{fig:figs}Lasso model", fig.height=4}
 par(mfrow = c(1,2))
 
 #trining the model
 lasso.model <- glmnet(x.train,y.train, alpha=1, lambda=NULL, family = "binomial")
 plot(lasso.model)
-title("LASSO Model")
 
 
 #Choosing optimal value for lambda
 set.seed(1)
 lasso.cv = cv.glmnet(x.train, y.train, alpha=1, family = "binomial", nfolds = length(train)) #lenght LOOCV
 plot(lasso.cv)
-title("CV - Lasso Model")
 best.lambda = lasso.cv$lambda.min
 
 #Ridge model with best lambda selected by CV
 model.lasso = glmnet(x.train, y.train, alpha=1, family = "binomial", lambda = best.lambda)
+
+```
+### 2.2.2 Displaying the values of chosen coefficients
+
+For better visualization of the most relevant predictors a barplot was used. The predictors with the largest absolute values are contributing with the highest weight to the model. 
+
+```{r,echo=FALSE, warning=FALSE, fig.cap="\\label{fig:figs} Values of LASSO model coefficients", fig.width=5,fig.height=3, fig.align="center"}
+
 #Displaying the coefficietns
-coef(model.lasso)
+coef.matrix = as.matrix(coef(model.lasso))
+#getting non-zero coefficients
+row_sub = apply(coef.matrix, 1, function(row) all(row !=0 ))
+coef.matrix = sort(coef.matrix[row_sub,])
+par(mfrow = c(1,1))
+midpts = barplot(coef.matrix, names.arg = "", col = viridis(10))
+title("Lasso coefficients for different proteins")
+## Use grid to add the labels    
+vps <- baseViewports()
+pushViewport(vps$inner, vps$figure, vps$plot)
+
+grid.text(names(coef.matrix),
+    x = unit(midpts, "native"), y=unit(-1, "lines"),
+    just="right", rot=50)
+
+popViewport(3)
+
+
 ```
 
 
 
 
-### What is the predictive power of the model? 
+### 2.2.3 What is the predictive power of the model? 
 
 Dummy encoding of the categorical varible:  C/S = 1, S/S = 0.
+
+The table below displays counts of:
+
+* True negative results = 14
+* True positive results = 9
+* False negative results = 0
+* False positive results = 1
+
+The total performance of the model calculated as *(TN count + TP count)/total count* is approximately 96%.
 
 ```{r}
 lasso.pred=predict(lasso.model ,s=best.lambda ,newx=x.test,type="response")
@@ -156,29 +252,75 @@ table(y.test,predictions)
 performanceLasso=length(which(predictions==y.test))/length(y.test)
 performanceLasso #14+9)/24 = 95,8%
 ```
-
-
-# Boosting model
-
+### 2.2.4 Selected proteins
+The Lasso model selects 11 predictors. It can do so by setting the value of other coefficients equal to zero. Below, there is a list of the selected predictors. 
 ```{r}
+vals=predict(model.lasso,s= best.lambda,type="coefficients")
+selected=colnames(x)[vals@i]
+selected
+```
+
+## 2.3 Comparison of Lasso and Ridge Models
+
+The test-set performance of Lasso model was much higher than the perfomance of the Ridge model. Moreover the final Lasso model contains only 11 predictors and hence allows for better interpretablity. From the values of the coefficients displayed in *Figure 4* we can see that predictors `nNOS_N` and `pCREB_N` have the largest weight in the classification model.
+
+### 2.3.1 Do correlations between variables influence the results? How? 
+
+From the correlation we found the names of all predictors that are more than 90% correlated with at least one another predictor. Those are:
+
+`"ITSN1_N"  "pERK_N" "BRAF_N" "DYRK1A_N" "pNR1_N"  "pBRAF_N"  "pMEK_N" "pAKT_N"  "CREB_N" "NR1_N" "pELK_N" "MEK_N" "JNK_N"   "NR2B_N" "MTOR_N" "pS6_N" "ARC_N"`
+
+We would not expect both of the highly correlated partners to have assigned a high coefficient value, as when one is present in the model, the other (highly correlated) predictor does not contribute with much new information to the model. Hence there is a little intersection between highly correlated variables and the selected variables by LASSO; the resulting intersection is:
+`"MEK_N"  "ARC_N"  "pS6_N"  "pERK_N"`
+
+We can verify the assumption of absence of both highly correlated partners in the lasso-selected variables by scanning through the `ordered` data frame of pairs with their correlation values. Among those that are more that 90% correlated we indeed do not observe any pairs of variables from the resulting intersection (4 proteins listed above). 
+
+To conclude the correlation between the variables influences the result - the more are the variables correlated,the fewer variables will be assigned non-zero weight in lasso or higher weights in the ridge model. 
+
+
+
+### 2.3.2 Can a reduced set of variables predict the Behavior variable? 
+
+From the performance measured on the test set we can conclude that the model using ridge regularization can predict the `Behavior` variable with a performance of 83% and model with lasso regularization can predict `Behavior` variable with a performance of 96%. The notable observation was that both models have 0 count of false negative results.
+
+# 3. Boosting model
+
+### 3.1 Searching for optimal model
+
+A Boosting tree - based model was used for the classification. Hyperparameters for number of trees = 5000 and interaction.depth = 5 were used in the initial model. 
+
+```{r, fig.cap="\\label{fig:figs} Relative influence plot", echo = FALSE}
 set.seed(1)
 cortex$dummy = ifelse(cortex$Behavior == "C/S", 1, 0)
-model.boost = gbm(cortex$dummy ~ ., data = cortex[train],  distribution = "bernoulli", n.trees = 5000, interaction.depth = 5)
+model.boost = gbm(cortex$dummy ~ ., data = cortex[train],  distribution = "bernoulli", 
+                  n.trees = 3000, interaction.depth = 3)
 summary(model.boost)
 ```
 
- The first two variables seem to be of greatest importance. 
+ The first two variables - `DYRK1A_N` and `pS6_N` seem to be of greatest importance. Interestingly, these variables were not assigned the largest weight in the lasso or ridge models, in fact `DYRK1A_N` was not even selected with a lasso model. When comparing the the top 11 predictors according to the relative importance in the Boositing model with the 11 variables selected by lasso there is an overlap of only 2 variables `pPKCAB_N` and `pCREB_N`. 
+ 
+ Below we can see partial dependence plots that isolation the effect on individual variables. Plots for the two most important variables were constructed: we can see that for increasinig expression levels of protein `DYRK1A_N` the likelihood of `C/S` behavior is increasing, while the opposite is true for the  expression levels of protein `pS6_N`. 
  
 
-```{r}
+```{r,echo=FALSE, warning=FALSE, fig.width=4,fig.height=3, fig.align="center"}
 plot(model.boost, i = "DYRK1A_N")
 plot(model.boost, i = "pS6_N")
+
 ``` 
 
-### What is the predictive power of the model? 
+### 3.1.1 What is the predictive power of the model? 
+
+The table below displays counts of: 
+
+* True negative results = 15
+* True positive results = 9
+* False negative results = 0
+* False positive results = 0
+
+The total performance of the model calculated as *(TN count + TP count)/total count* is 100%.
 
 ```{r}
-boost.pred = predict(model.boost, cortex[test, ], n.trees = 5000)
+boost.pred = predict(model.boost, cortex[test, ], n.trees = 3000)
 predictions=rep(0 ,length(cortex[test, "dummy"]))
 predictions[boost.pred>0.5]= 1
 table(cortex[test, "dummy"],predictions)
@@ -186,72 +328,141 @@ performanceBoost=length(which(predictions==cortex[test, "dummy"]))/length(cortex
 performanceBoost # 100%
 ```
 
-# Does Memantine injection influence protein values when controlling for genotype and tretement?
+## 3.2 Comparison of Boosting model to Ridge and Lasso Models
 
-One-way ANOVA -> H0: mean(protein expression levels +Memantime) == mean(protein expression levels -Memantime)
-Not taing the effect of genotype or behaviour. 
+### 3.2.2 Are the same variables important for the predictions? 
+As it was previously mentioned (*section 3.1*) the most relevant predictors from Boosting model and Lasso/Ridge differ significantly. The biological function of the most relevant protein selected by boosting model is: 
+* DYRK1A = Dual specificity tyrosine-phosphorylation-regulated kinase 1, the literature suggests its potential link to Down syndrome
 
-```{r}
+
+### 3.2.3 Do you see evidence for non-linear effects or interactions between the most important predictor variables?
+
+Boosting tree-based model automatically takes into account the interactions between the variables. For example: once the decision tree is divided at node based on predictor A and the two nodes of A are further divided based on predictor B; the 'decision value' in B predictors can be different for the two branches created from A. Also the model is also not inherently linear. Since for this model we observed 100% test set performance we can conclude that there are likely non-linear effects and interactions that were explained in Boosting model and hence a better test set perfomance could have been achieved compared to the lasso/ridge models.
+
+
+# 4. Does Memantine injection influence protein values when controlling for genotype and treatment?
+
+# 4.1 Effect of Memanatine
+
+To see if the Memantine treatment has influence of the protein expression values **Wilcoxon rank sum test** and  was used. Since it was found that normality cannot be assumed a non-parametric alternative to t-test was used.  For each protein the expression level values were split into two groups - treated and not-treated with Memantine. The following hypothesis was tested: *H0: The center values in both treated and untreated samples are identical*. If the p.value smaller that 0.05 was reached, H0 could be rejected in the favor of the alternative. In this way a list of differentially expressed proteins was found:
+
+`"ELK_N"    "P38_N"    "pMTOR_N"  "NUMB_N"   "pGSK3B_N" "GFAP_N"   "IL1B_N"   "P3525_N"`
+
+The following boxplots display the distributions for the differentially expressed in the two conditions observed. 
+
+
+```{r, echo=FALSE, warning=FALSE, fig.width=6,fig.height=7,  fig.align="center"}
 treatement.indexes = cortex$Treatment == "Memantine"
 differentially_expressed = c()
 
 for (i in 1:70){
+  
   treated = cortex[treatement.indexes, i]
   untreated = cortex[!treatement.indexes, i]
-  test = t.test(treated, untreated, alternative = "two.sided")
+  test = wilcox.test(treated, untreated)
   if(test$p.value < 0.05) {
     differentially_expressed = c(differentially_expressed, names(cortex)[i])
   }
 }
 
-differentially_expressed
 
 par(mfrow = c(3,3))
 for (i in differentially_expressed) {
-  boxplot(cortex[, i] ~ cortex$Treatment, ylab = i, xlab = "treatement")
+  boxplot(cortex[, i] ~ cortex$Treatment, ylab = i, xlab = "treatement", col = viridis(4))
 }
 
 ```
 
 
-## Taking the 'Behavior' into account
-Two-way anova
+## 4.2 Effect of Memnatine fixing `Behavior` and `Genotype` 
 
-```{r}
-differentially_expressed_behavior = c()
+To see if Memantime in itself has a significant effect on gene expression, the gene expression data we divided into groups based on their `Behaviour` and `Genotype` values. In this way the gene expression data were grouped into 4 groups: 
 
-for (i in 1:70){
-  model.anova = aov(cortex[, i] ~ Treatment + Behavior, data = cortex, contrasts = list(Behavior = "contr.sum", Treatment = "contr.sum"))
-  p.val.treatement = summary(model.anova)[[1]][["Pr(>F)"]][1]
-  p.val.behaviour = summary(model.anova)[[1]][["Pr(>F)"]][2]
-  if(p.val.behaviour < 0.05 && p.val.treatement < 0.05) {
-    differentially_expressed_behavior = c(differentially_expressed_behavior, names(cortex)[i])
+* `Genotype = Ts65Dn Behavior = C/S`
+* `Genotype = Ts65Dn Behavior = S/C`
+* `Genotype = Control Behavior = C/S`
+* `Genotype = Control Behavior = S/C`
+
+This approach was attempting to minimize the effect of the two other variable on gene expression and isolate only the effect of `Treatment`. For analysis Wilcoxon rank sum test was used as in the previous analyses. With the combinations of both variables no significant result was found. Therefore the next step was to fix just one variable at a time and observe the effect of `Treatment`. However with this approach it is not possible to disregard the effect of the second variable. For this analysis the following four groups were created and the corresponding differentially expressed proteins were found:
+
+* `Genotype Ts65Dn: "NR1_N"    "NR2A_N"   "pPKCAB_N" "JNK_N"    "APP_N"    "ADARB1_N"` 
+* `Genotype Control: "pNR2A_N"  "NR2B_N"   "RAPTOR_N" "ADARB1_N" "P3525_N" `
+* `Behavior C/S: "S6_N"`
+* `Behavior S/C: "DYRK1A_N" "ITSN1_N"   "pAKT_N"  "pCAMKII_N"   "PKCA_N" "pPKCAB_N"  "BRAF_N" "GSK3B_N" "TRKA_N" "APP_N" "DSCR1_N" "pNUMB_N" "TIAM1_N" "pPKCG_N" "GluR3_N" "Ubiquitin_N"`
+
+
+
+```{r, echo=FALSE, warning=FALSE}
+
+get_differentally_expressed <- function(df, category){
+  
+  genotype.indexes = cortex$Genotype == "Ts65Dn"
+  behavior.indexes = cortex$Behavior == "C/S"
+  differentially_expressed = c()
+  treatement.indexes = cortex$Treatment == "Memantine"
+  indexes= rep(1,70)
+  for (i in 1:70){
+    if (category == 1) {indexes[i] = ifelse(genotype.indexes[i] == T && behavior.indexes[i] == T, T, F) }
+    if (category == 2) {indexes[i] = ifelse(genotype.indexes[i] == T && behavior.indexes[i] == F, T, F) }
+    if (category == 3) {indexes[i] = ifelse(genotype.indexes[i] == F && behavior.indexes[i] == T, T, F) }
+    if (category == 4) {indexes[i] = ifelse(genotype.indexes[i] == F && behavior.indexes[i] == F, T, F) }
   }
+  
+  data = df[indexes, ]
+  
+
+  for (i in 1:70){
+    treated = data[treatement.indexes, i]
+    untreated = data[!treatement.indexes, i]
+    test = wilcox.test(treated, untreated, paired = FALSE)
+    if(!is.na(test$p.value) && test$p.value < 0.05) {
+      differentially_expressed = c(differentially_expressed, names(data)[i])
+    }
+  }
+  differentially_expressed
 }
 
-differentially_expressed_behavior
+cat1 = get_differentally_expressed(cortex, 1)
+cat2 = get_differentally_expressed(cortex, 2)
+cat3 = get_differentally_expressed(cortex, 3)
+cat4 = get_differentally_expressed(cortex, 4)
+
 ```
 
 
-## Taking the 'Behaviour' into account
+```{r, echo=FALSE, warning=FALSE}
 
+get_differentally_expressed <- function(df, category){
+  
+  genotype.indexes = cortex$Genotype == "Ts65Dn"
+  behavior.indexes = cortex$Behavior == "C/S"
+  differentially_expressed = c()
+  treatement.indexes = cortex$Treatment == "Memantine"
 
-Two-way anova
+  if (category == 1) {indexes = genotype.indexes}
+  if (category == 2) {indexes = !genotype.indexes}
+  if (category == 3) {indexes = behavior.indexes}
+  if (category == 4) {indexes = !behavior.indexes}
 
-```{r}
+  
+  data = df[indexes, ]
+  
 
-differentially_expressed_genotype = c()
-
-for (i in 1:70){
-  model.anova = aov(cortex[, i] ~ Treatment + Genotype, data = cortex, contrasts = list(Genotype = "contr.sum", Treatment = "contr.sum"))
-  p.val.treatement = summary(model.anova)[[1]][["Pr(>F)"]][1]
-  p.val.genotype = summary(model.anova)[[1]][["Pr(>F)"]][2]
-  if(p.val.genotype < 0.05 && p.val.treatement < 0.05) {
-    differentially_expressed_genotype = c(differentially_expressed_genotype, names(cortex)[i])
+  for (i in 1:70){
+    treated = data[treatement.indexes, i]
+    untreated = data[!treatement.indexes, i]
+    test = wilcox.test(treated, untreated, paired = FALSE)
+    if(!is.null(test) && test$p.value < 0.05) {
+      differentially_expressed = c(differentially_expressed, names(data)[i])
+    }
   }
+  differentially_expressed
 }
 
-differentially_expressed_genotype
+cat1 = get_differentally_expressed(cortex, 1)
+cat2 = get_differentally_expressed(cortex, 2)
+cat3 = get_differentally_expressed(cortex, 3)
+cat4 = get_differentally_expressed(cortex, 4)
 
 ```
 
